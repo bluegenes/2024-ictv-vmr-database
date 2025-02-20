@@ -6,8 +6,12 @@ import time
 import requests
 
 # Set API key for NCBI access
-API_KEY = os.environ.get("NCBI_API_KEY", "")
-HEADERS = {"Accept": "application/json"} # explicitly specify we want JSON
+API_KEY = os.environ.get("NCBI_API_KEY")
+if not API_KEY:
+    print("Please set the NCBI_API_KEY environment variable.")
+    sys.exit(1)
+# HEADERS = {"Accept": "application/json"} # explicitly specify we want JSON
+HEADERS = {}
 
 
 def load_processed_rows(output_file):
@@ -29,21 +33,24 @@ def retrieve_assembly_accession(identifier):
     """
     Retrieve the NCBI Assembly accession using the REST API.
     """
-    url = f"https://api.ncbi.nlm.nih.gov/datasets/v2/genome/sequence_assemblies/{identifier}"
+    url = f"https://api.ncbi.nlm.nih.gov/datasets/v2/genome/sequence_accession/{identifier}/sequence_assemblies"
     params = {"api_key": API_KEY}
     try:
         response = requests.get(url, params=params, headers=HEADERS)
-        time.sleep(0.1)  # Limit requests to 10 per second
         
         if response.status_code == 200:
             data = response.json()
-            if "assembly" in data and "accession" in data["assembly"]:
-                return data["assembly"]["accession"]
+            if "accessions" in data:
+                acc = data["accessions"]
+                if acc:
+                    print(f"Found {identifier}: {acc[0]}")
+                    return acc[0]
         else:
             print(f"Error retrieving {identifier}: HTTP {response.status_code} - {response.text}")
     except requests.RequestException as e:
         print(f"Request error for {identifier}: {e}")
-    return None
+        return None
+    time.sleep(0.1)  # Limit requests to 10 per second
 
 
 # def extract_accs(id_col):
@@ -95,11 +102,16 @@ def retrieve_acc(acc_col):
     
         for id in ids:
             try:
-                acc = retrieve_assembly_accession(id)
+                if '.' not in id:
+                    for i in range(1, 21):
+                        acc = retrieve_assembly_accession(f"{id}.{i}")
+                        if acc:
+                            break
+                else:
+                    acc = retrieve_assembly_accession(id)
             except requests.RequestException:
                 failure_reasons.append("retrieval")
                 continue
-            
             if not acc:
                 failure_reasons.append('no_assembly')
             else:
@@ -110,12 +122,14 @@ def retrieve_acc(acc_col):
     return acc, failure_reasons
 
 
-def find_assembly_accessions(row):
+def find_assembly_accessions(row, n_found):
     """Find the GenBank Assembly accession corresponding to the given GenBank/RefSeq IDs."""
     genbank_assembly_id, genbank_failures = retrieve_acc(row["Virus GENBANK accession"])
-    row["GenBank Assembly ID"] = genbank_assembly_id
+    if genbank_assembly_id:
+        n_found += 1
+        row["GenBank Assembly ID"] = genbank_assembly_id
     row["GenBank Failures"] = ";".join(genbank_failures)
-    return row
+    return row, n_found
 
 
 def main(args):
@@ -138,7 +152,7 @@ def main(args):
         curated_ds.write("accession,name,moltype,md5sum,download_filename,url,range\n")
     
     processed = load_processed_rows(args.existing_vmr) if args.existing_vmr else {}
-
+    n_found = 0
     with open(args.input_vmr, 'r') as inF, open(args.output_vmr, 'w', newline='') as out_acc:
         reader = csv.DictReader(inF, delimiter='\t')
         fieldnames = reader.fieldnames + ["GenBank Assembly ID", "GenBank Failures"]
@@ -147,6 +161,8 @@ def main(args):
         
         for n, row in enumerate(reader):
             gb_col = row["Virus GENBANK accession"]
+            row["GenBank Assembly ID"] = ""
+            row["GenBank Failures"] = ""
             if gb_col in processed:
                 writer.writerow(processed[gb_col])
                 continue 
@@ -154,7 +170,12 @@ def main(args):
             if n % 500 == 0:
                 print(f"Processed {n} accessions...")
             
-            row = find_assembly_accessions(row)
+            row, n_found = find_assembly_accessions(row, n_found)
+            # seqacc = row["Virus GENBANK accession"]
+            # # genbank_assembly_id, genbank_failures = retrieve_acc(seqacc)
+            # print(f"Found {genbank_assembly_id} with failures: {genbank_failures}")
+            # row["GenBank Assembly ID"] = genbank_assembly_id
+            # row["GenBank Failures"] = ";".join(genbank_failures)
             if args.output_directsketch:
                 virus_name = f"{row['Virus name(s)']} {row['Virus isolate designation']}".strip().replace(',', ';')
                 if row['GenBank Assembly ID']:
@@ -189,6 +210,7 @@ def main(args):
                         pass
                         # prep and write urlsketch file
             writer.writerow(row)
+    print(f"Found {n_found} assembly accessions.")
 
 
 def cmdline(sys_args):
