@@ -3,15 +3,20 @@ import sys
 import argparse
 import csv
 import time
+import re
 import requests
 import concurrent.futures
 import threading
 import signal
 from tenacity import retry, stop_after_attempt, wait_exponential
-
+import multiprocessing
 
 API_KEY = os.environ.get("NCBI_API_KEY")
 HEADERS = {}
+
+NUM_CORES = multiprocessing.cpu_count()
+THREADS = min(10, NUM_CORES * 2)  # Use 2x cores but cap at 10
+
 # Semaphore to limit requests to 10 per second
 semaphore = threading.Semaphore(10)
 lock = threading.Lock()  # Prevents race conditions when printing
@@ -106,34 +111,19 @@ def retrieve_acc(acc_col):
         if not ids:
             failure_reasons.append('no_accession')
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_id = {
-                executor.submit(retrieve_assembly_accession, f"{id}.{i}" if '.' not in id else id): id
-                for id in ids for i in range(1, 21)
-            }
-
-            try:
-                for future in concurrent.futures.as_completed(future_to_id):
-                    if should_exit:
-                        break  # Stop processing if exiting
-                    result = future.result()
-                    if result:
-                        all_accs.add(result)
-
-            except KeyboardInterrupt:
-                print("\nCtrl+C detected. Cancelling all running requests...")
-                for future in future_to_id:
-                    future.cancel()  # Cancel pending tasks
-                executor.shutdown(wait=False)  # Shut down immediately
-                sys.exit(1)
+        for id in ids:
+            for i in range(1, 21):
+                identifier = f"{id}.{i}" if '.' not in id else id
+                if should_exit:
+                    return "", ["interrupted"]
+                result = retrieve_assembly_accession(identifier)
+                if result:
+                    all_accs.add(result)
 
     if not all_accs:
         failure_reasons.append('no_assembly')
         return "", failure_reasons
 
-    # if len(all_accs) > 1:
-    #     failure_reasons.append("multiple_acc")  # Flag the issue
-    #     print(f"ERROR: Multiple different assembly accessions found for {acc_col}: {all_accs}")
     if len(all_accs) > 1:
         # Extract base accession (everything before the last dot) and version (number after the last dot)
         acc_versions = {}
@@ -158,7 +148,6 @@ def retrieve_acc(acc_col):
     return ("" if len(all_accs) > 1 else all_accs.pop()), failure_reasons
 
 
-
 def find_assembly_accessions(row, n_found):
     """Find the GenBank Assembly accession corresponding to the given GenBank/RefSeq IDs."""
     genbank_assembly_id, genbank_failures = retrieve_acc(row["Virus GENBANK accession"])
@@ -169,20 +158,6 @@ def find_assembly_accessions(row, n_found):
     return row, n_found
 
 
-def process_rows(rows):
-    """Process rows in parallel using ThreadPoolExecutor."""
-    n_found = 0
-    processed_rows = []
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_row = {executor.submit(find_assembly_accessions, row, n_found): row for row in rows}
-        for future in concurrent.futures.as_completed(future_to_row):
-            row, n_found = future.result()
-            processed_rows.append(row)
-    
-    return processed_rows
-
-
 def main(args):
     global should_exit
     # Need to API key for 10 NCBI requests/s
@@ -191,12 +166,16 @@ def main(args):
         sys.exit(1)
     
     processed = load_processed_rows(args.existing_vmr) if args.existing_vmr else {}
+    num_processed = len(processed)
+    if num_processed:
+        print(f"loaded {num_processed} pre-processed rows.")
 
     if args.input_vmr.endswith('xlsx'):
         import pandas as pd
         vmr = pd.read_excel(args.input_vmr, sheet_name=args.sheet_name)
         vmr_tsv = args.input_vmr.replace('.xlsx', '.tsv')
         vmr.to_csv(vmr_tsv, index=False, sep='\t')
+        print(f"Converted '{args.input_vmr}' to '{vmr_tsv}'")
         if args.only_convert:
             sys.exit(0)
         args.input_vmr = vmr_tsv
@@ -215,13 +194,13 @@ def main(args):
         writer.writeheader()
 
         n_found = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        n_to_search = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=THREADS) as executor:
             future_to_row = {}
-
             try:
-                for n, row in enumerate(reader):
+                for row in reader:
                     if should_exit:
-                        break  # Stop processing if exiting
+                        break # stop processing if exiting
                     gb_col = row["Virus GENBANK accession"]
                     row["GenBank Assembly ID"] = ""
                     row["GenBank Failures"] = ""
@@ -229,12 +208,14 @@ def main(args):
                     if gb_col in processed:
                         writer.writerow(processed[gb_col])
                         continue
+                    n_to_search += 1
 
                     # Submit row for processing in parallel
                     future = executor.submit(find_assembly_accessions, row, n_found)
                     future_to_row[future] = row
 
-                processed_count = 0
+                print(f"Loaded all rows, found {n_to_search} rows to search.")
+                search_count = 0
 
                 # Collect results as they finish
                 for future in concurrent.futures.as_completed(future_to_row):
@@ -244,11 +225,14 @@ def main(args):
                     row, n_found = future.result()
                     
                     writer.writerow(row)
-                    processed_count += 1
-                    if processed_count % 500 == 0:
-                        print(f"Processed {processed_count} accessions...")
-                        out_acc.flush() # flush every 500 rows
+                    search_count += 1
+                    if search_count % 100 == 0:
+                        print(f"Searched {search_count}/{n_to_search} accessions...")
                         sys.stdout.flush() # ensure progress updates are visible
+                        out_acc.flush() # flush every 100 rows
+                        if args.output_directsketch:
+                            ds.flush()
+                            curated_ds.flush()
 
                     # Handle directsketch output
                     if args.output_directsketch:
@@ -279,7 +263,8 @@ def main(args):
         ds.close()
         curated_ds.close()
 
-    print(f"Processing complete.")
+    if not should_exit:
+        print(f"Processing complete.")
 
 
 if __name__ == '__main__':
