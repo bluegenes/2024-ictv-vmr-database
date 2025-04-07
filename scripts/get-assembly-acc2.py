@@ -124,29 +124,33 @@ def retrieve_acc(acc_col):
         failure_reasons.append('no_assembly')
         return "", failure_reasons
 
-    if len(all_accs) > 1:
-        # Extract base accession (everything before the last dot) and version (number after the last dot)
-        acc_versions = {}
-        for acc in all_accs:
-            match = re.match(r"^(GCA_\d+)\.(\d+)$", acc)
-            if match:
-                base_acc, version = match.groups()
-                version = int(version)  # Convert version to integer for sorting
-                if base_acc not in acc_versions or version > acc_versions[base_acc]:
-                    acc_versions[base_acc] = version  # Keep highest version
+    # Separate GCA and GCF accessions by base accession and version
+    acc_versions = {"GCA": {}, "GCF": {}}
+    for acc in all_accs:
+        match = re.match(r"^(GCF|GCA)_(\d+)\.(\d+)$", acc)
+        if match:
+            prefix, base, version = match.groups()
+            base_acc = f"{prefix}_{base}"
+            version = int(version)
+            if base_acc not in acc_versions[prefix] or version > acc_versions[prefix][base_acc]:
+                acc_versions[prefix][base_acc] = version
 
-        if len(acc_versions) == 1:
-            # If all accessions share the same base, take the highest version
-            latest_acc = f"{list(acc_versions.keys())[0]}.{max(acc_versions.values())}"
-            return latest_acc, []  # No failure reason, since we resolved it
+    # Prefer highest GCF version, if available
+    if acc_versions["GCF"]:
+        best_gcf = max(
+            acc_versions["GCF"].items(), key=lambda kv: kv[1]
+        )  # (base_acc, version)
+        return f"{best_gcf[0]}.{best_gcf[1]}", []
 
-        # If different base accessions exist, flag as multiple accessions
-        failure_reasons.append("multiple_acc")
-        print(f"ERROR: Multiple different assembly accessions found for {acc_col}: {all_accs}")
+    # Else fall back to highest GCA version
+    if acc_versions["GCA"]:
+        best_gca = max(
+            acc_versions["GCA"].items(), key=lambda kv: kv[1]
+        )  # (base_acc, version)
+        return f"{best_gca[0]}.{best_gca[1]}", []
 
-    # Return empty accession if there are conflicts, otherwise return the single valid one
-    return ("" if len(all_accs) > 1 else all_accs.pop()), failure_reasons
-
+    failure_reasons.append("no_valid_accession")
+    return "", failure_reasons
 
 def find_assembly_accessions(row, n_found):
     """Find the GenBank Assembly accession corresponding to the given GenBank/RefSeq IDs."""
