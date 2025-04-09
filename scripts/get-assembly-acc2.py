@@ -10,6 +10,10 @@ import threading
 import signal
 from tenacity import retry, stop_after_attempt, wait_exponential
 import multiprocessing
+# avoid seeing openpyxl warnings
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
+
 
 API_KEY = os.environ.get("NCBI_API_KEY")
 HEADERS = {}
@@ -162,6 +166,34 @@ def find_assembly_accessions(row, n_found):
     return row, n_found
 
 
+def write_directsketch_output(row, basename, ds=None, curated_ds=None):
+    virus_name = f"{row.get('Virus name(s)', '')} {row.get('Virus isolate designation', '')}".strip().replace(',', ';')
+    gb_col = row.get("Virus GENBANK accession", "")
+    gb_assembly = row.get("GenBank Assembly ID")
+
+    if ds and gb_assembly:
+        name = f"{gb_assembly} {virus_name}"
+        ds.write(f"{row['GenBank Assembly ID']},{name}\n")
+    elif curated_ds and gb_col:
+        vmr_acc = f"{basename}_{row.get('Species Sort', '')}_{row.get('Isolate Sort', '')}"
+        curated_name = f"{vmr_acc} {virus_name}".strip()
+        dl_filename = f"{vmr_acc}.fna.gz"
+
+        gb_acc = extract_accs(gb_col)
+        dl_links = [
+            f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={gba}&rettype=fasta&retmode=text"
+            for gba in gb_acc if gba
+        ]
+
+        range_info = ""
+        if "(" in gb_col and ")" in gb_col:
+            range_info = gb_col[gb_col.find("(")+1:gb_col.find(")")]
+            range_info = range_info.replace('.', '-')
+
+        if dl_links:
+            curated_ds.write(f"{vmr_acc},{curated_name},DNA,,{dl_filename},{';'.join(dl_links)},{range_info}\n")
+
+
 def main(args):
     global should_exit
     # Need to API key for 10 NCBI requests/s
@@ -184,6 +216,8 @@ def main(args):
             sys.exit(0)
         args.input_vmr = vmr_tsv
 
+    ds = None
+    curated_ds = None
     if args.output_directsketch:
         basename = args.output_vmr.split('.tsv')[0]
         ds = open(f"{basename}.gbsketch.csv", 'w')
@@ -206,11 +240,15 @@ def main(args):
                     if should_exit:
                         break # stop processing if exiting
                     gb_col = row["Virus GENBANK accession"]
+                    # init these rows for unprocessed accs
                     row["GenBank Assembly ID"] = ""
                     row["GenBank Failures"] = ""
 
-                    if gb_col in processed:
-                        writer.writerow(processed[gb_col])
+                    if gb_col in processed.keys():
+                        processed_row = processed[gb_col]
+                        writer.writerow(processed_row)
+                        if args.output_directsketch:
+                            write_directsketch_output(processed_row, basename, ds, curated_ds)
                         continue
                     n_to_search += 1
 
@@ -240,24 +278,8 @@ def main(args):
 
                     # Handle directsketch output
                     if args.output_directsketch:
-                        virus_name = f"{row['Virus name(s)']} {row['Virus isolate designation']}".strip().replace(',', ';')
-                        if row['GenBank Assembly ID']:
-                            name = f"{row['GenBank Assembly ID']} {virus_name}"
-                            ds.write(f"{row['GenBank Assembly ID']},{name},\n")
-                        else:
-                            if not gb_col:
-                                continue
-                            vmr_acc = f"{basename}_{row['Species Sort']}_{row['Isolate Sort']}"
-                            curated_name = f"{vmr_acc} {virus_name}".strip()
-                            dl_filename = f"{vmr_acc}.fna.gz"
-                            gb_acc = extract_accs(gb_col)
-                            dl_links = [f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={gba}&rettype=fasta&retmode=text" for gba in gb_acc if gba]
-                            range_info = ""
-                            if "(" in gb_col and ")" in gb_col:
-                                range_info = gb_col[gb_col.find("(")+1:gb_col.find(")")]
-                                range_info = range_info.replace('.', '-')
-                            if dl_links:
-                                curated_ds.write(f"{vmr_acc},{curated_name},DNA,,{dl_filename},{';'.join(dl_links)},{range_info}\n")
+                        write_directsketch_output(row, basename, ds, curated_ds)
+
             except KeyboardInterrupt:
                 print("\nInterrupted. Shutting down workers...")
                 executor.shutdown(wait=False, cancel_futures=True)
@@ -273,12 +295,13 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--input-vmr", default="inputs/VMR_MSL39.v4_20241106.xlsx")
-    parser.add_argument("-o", "--output-vmr", default='inputs/VMR_MSL39.v4_20241106.acc.tsv')
-    parser.add_argument("-p", "--existing-vmr", default='inputs/VMR_MSL39.v4_20241106.acc.bak.tsv')
-    parser.add_argument("-s", "--sheet-name", default='VMR MSL39')
+    parser.add_argument("-i", "--input-vmr", default="inputs/VMR_MSL40.v1.20250307.xlsx")
+    parser.add_argument("-o", "--output-vmr", default='inputs/VMR_MSL40.v1.20250307.acc.tsv')
+    parser.add_argument("-p", "--existing-vmr")
+    parser.add_argument("-s", "--sheet-name", default='VMR MSL40')
     parser.add_argument("-c", "--only-convert", action='store_true', default=False, help="Only convert excel to tsv, then exit.")
     parser.add_argument("--output-directsketch", action="store_true", help="Output directsketch gbsketch file and urlsketch file(s).")
     args = parser.parse_args()
 
     main(args)
+
