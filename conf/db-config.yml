@@ -1,13 +1,18 @@
+
+basename: 'vmr_MSL40_v1'
+# use scripts/get-assembly-acc2.py to build this file from the xlsx
+vmr_acc_tsv: 'inputs/VMR_MSL40.v1.20250307.acc.tsv'
+
 sourmash_params:
   DNA:
     ksize: [21, 31]
-    scaled: [50,100] # 1,10,1000
+    scaled: [50] # 1,10,100,1000
     threshold_bp: 0
   skipm1n3:
     ksize: [15,18,21,24,27]
-    scaled: [50,100] #1,10 1,5,10,1000
+    scaled: [50] #1,10 1,5,10,100,1000
     threshold_bp: 0
   skipm2n3:
     ksize: [15,18,21,24,27]
-    scaled: [50,100] #1,10,1000
+    scaled: [50] #1,10,100,1000
     threshold_bp: 0

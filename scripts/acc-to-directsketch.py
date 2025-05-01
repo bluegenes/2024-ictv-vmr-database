@@ -121,13 +121,15 @@ def main(args):
                         lineages.write(','.join(lineages_row) + '\n')
                         continue # skip rest of loop
                     else:
-                        # Skip if no newer version is available
-                        print(f"Skipping {acc} for {virus_name} due to historical suppression or failure.")
+                        # Skip if no version is available
+                        print(f"Cannot update version: {acc} for {virus_name} -- historical suppression or failure.")
                         suppressed.write(','.join(row.values()) + '\n')
 
+                # if we get here, we have no assembly acc OR it's suppressed
+                # check if we have a GenBank accession. If so, write it to the urlsketch file
                 gb_col = row["virus genbank accession"]
                 if gb_col == "":
-                    # skip anything where we don't have any sequence
+                    # skip anything where we don't have any sequence available on genbank
                     continue
                 vmr_acc = f"{args.basename}_{row['species sort']}_{row['isolate sort']}"
                 curated_name = f"{vmr_acc} {virus_name}".strip()

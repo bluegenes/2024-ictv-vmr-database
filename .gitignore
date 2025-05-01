@@ -2,3 +2,6 @@ inputs/*
 output*
 *csv
 *tsv
+.snakemake
+genbank/*
+
