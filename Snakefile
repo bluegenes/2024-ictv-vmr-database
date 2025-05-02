@@ -74,9 +74,9 @@ wildcard_constraints:
 
 rule all:
     input:
-        expand(os.path.join(out_dir, f"{basename}.zip")),
+        expand(os.path.join(out_dir, f"{basename}.sig.zip")),
         expand(os.path.join(out_dir, f"{basename}.{{params}}.rocksdb/CURRENT"), params=param_combos),
-        # os.path.join(out_dir, "blastn", f"{basename}.index.nhr"),
+        os.path.join(out_dir, "blast", f"{basename}.blastn.index.nhr"),
 
 
 ### Rules for ICTV GenBank Assemblies:
@@ -177,37 +177,12 @@ rule urlsketch:
                                   --failed {output.failed} --verbose --batch-size 2000 2> {log}
         """
 
-# rule directsketch_curated_download:
-#     input: 
-#         os.path.join(out_dir, f"{basename}.urlsketch.csv"),
-#     output:
-#         failed = os.path.join(out_dir, f"{basename}.urlsketch-download-failed.csv"),
-#     params:
-#         fastadir= curated_fasta_dir,
-#     threads: 1
-#     resources:
-#         mem_mb=3000,
-#         disk_mb=5000,
-#         runtime=60,
-#         time=90,
-#         partition="low2",
-#     log: os.path.join(logs_dir, "urlsketch", f"{basename}.download.urlsketch.log")
-#     benchmark: os.path.join(logs_dir, "urlsketch", f"{basename}.download.urlsketch.benchmark")
-#     conda: "directsketch-main.yml"
-#     shell:
-#         """
-#         sourmash scripts urlsketch {input} -n 9 --download-only \
-#                                   --keep-fasta --fastas {params.fastadir} \
-#                                   --genomes-only --retry-times 15 \
-#                                   --failed {output.failed} 2> {log}
-#         """
-
 rule combine_sigs:
     input:
         directsketch = os.path.join(out_dir, f"{basename}.gbsketch.sig.zip.batchlist.txt"),
         curated = os.path.join(out_dir, f"{basename}.urlsketch.sig.zip.batchlist.txt"),
     output:
-        combined = os.path.join(out_dir, f"{basename}.zip"),
+        combined = os.path.join(out_dir, f"{basename}.sig.zip"),
     threads: 1
     resources:
         mem_mb=10000,
@@ -224,7 +199,7 @@ rule combine_sigs:
 
 rule index_rocksdb:
     input:
-        os.path.join(out_dir, f"{basename}.zip"),
+        os.path.join(out_dir, f"{basename}.sig.zip"),
     output:
         rocksdb_current = os.path.join(out_dir, f"{basename}.{{moltype}}-k{{ksize}}-sc{{scaled}}.rocksdb/CURRENT"),
     threads: 1
@@ -249,48 +224,46 @@ rule index_rocksdb:
 ## rules for BLAST db generation
 
 # get lengths of sequences in FASTA files + combine all into single FASTA file
-# rule combine_fasta_and_save_length_info:
-#     input:
-#         #zipf = os.path.join(out_dir, f"{basename}.sc1.urlsketch.zip"), # use zip to make sure we have the fasta files
-#         gb_fail = os.path.join(out_dir, f"{basename}.gbsketch-download-assemblies-failed.csv"),
-#         gb_c_failed = os.path.join(out_dir, f"{basename}.urlsketch-download-failed.csv"),
-#         urlsketch_csv = 
-#         gbsketch_csv = gbsketch_csv, 
-#     output: 
-#         combined= os.path.join(out_dir, f"{basename}.fna.gz"),
-#         lengths= os.path.join(out_dir, f"{basename}.lengths.csv"),
-#     params:
-#         curated_fasta_dir = curated_fasta_dir,
-#         assembly_fasta_dir = assembly_fasta_dir,
-#     log: os.path.join(logs_dir, "combine-fasta", f"{basename}.log")
-#     benchmark: os.path.join(logs_dir, "combine-fasta", f"{basename}.benchmark")
-#     shell:
-#         """
-#         python combine-fasta.py --urlsketch-csv {input.urlsketch_csv} \
-#                                 --gbsketch-csv {input.gbsketch_csv} \
-#                                 --combined {output.combined} \
-#                                 --lengths {output.lengths} \
-#                                 --curated-fasta-dir {params.curated_fasta_dir} \
-#                                 --assembly-fasta-dir {params.assembly_fasta_dir} 2> {log}
-#         """
+rule combine_fasta_and_save_length_info:
+    input:
+        zipf = os.path.join(out_dir, f"{basename}.sig.zip"), # use zip to make sure we have the fasta files
+        urlsketch_csv =  os.path.join(out_dir, f"{basename}.urlsketch.csv"),
+        gbsketch_csv = os.path.join(out_dir, f"{basename}.gbsketch.csv"),
+    output: 
+        combined= os.path.join(out_dir, f"{basename}.fna.gz"),
+        lengths= os.path.join(out_dir, f"{basename}.lengths.csv"),
+    params:
+        curated_fasta_dir = curated_fasta_dir,
+        assembly_fasta_dir = assembly_fasta_dir,
+    log: os.path.join(logs_dir, "combine-fasta", f"{basename}.log")
+    benchmark: os.path.join(logs_dir, "combine-fasta", f"{basename}.benchmark")
+    shell:
+        """
+        python scripts/combine-fasta.py --urlsketch-csv {input.urlsketch_csv} \
+                                --gbsketch-csv {input.gbsketch_csv} \
+                                --combined {output.combined} \
+                                --lengths {output.lengths} \
+                                --curated-fasta-dir {params.curated_fasta_dir} \
+                                --assembly-fasta-dir {params.assembly_fasta_dir} 2> {log}
+        """
 
-# # # Rule to build BLAST index for the combined gzipped fasta file
-# rule build_blast_nucl_index:
-#     input:
-#         fasta = os.path.join(out_dir, f"{basename}.fna.gz"),
-#     output:
-#         index = os.path.join(out_dir, "blastn", f"{basename}.index.nhr")
-#     params:
-#         title = os.path.join(f"{basename}"),
-#         out_base = os.path.join(out_dir, "blast", f"{basename}.blastn.index")
-#     log:  os.path.join(logs_dir, "blast", f"{basename}.blastn-index.log")
-#     benchmark:  os.path.join(logs_dir, "blast", f"{basename}.blastn-index.benchmark")
-#     conda: "conf/env/blast.yml"
-#     shell:
-#         """
-#         gunzip -c {input.fasta} | makeblastdb -in - -dbtype nucl -parse_seqids \
-#                -out {params.out_base} -title {params.title} 2> {log}
-#         """
+# Rule to build BLAST index for the combined gzipped fasta file
+rule build_blast_nucl_index:
+    input:
+        fasta = os.path.join(out_dir, f"{basename}.fna.gz"),
+    output:
+        index = os.path.join(out_dir, "blast", f"{basename}.blastn.index.nhr")
+    params:
+        title = os.path.join(f"{basename}"),
+        out_base = os.path.join(out_dir, "blast", f"{basename}.blastn.index")
+    log:  os.path.join(logs_dir, "blast", f"{basename}.blastn-index.log")
+    benchmark:  os.path.join(logs_dir, "blast", f"{basename}.blastn-index.benchmark")
+    conda: "conf/env/blast.yml"
+    shell:
+        """
+        gunzip -c {input.fasta} | makeblastdb -in - -dbtype nucl -parse_seqids \
+               -out {params.out_base} -title {params.title} 2> {log}
+        """
 
 # rule build_prot_index:
 #     input:
