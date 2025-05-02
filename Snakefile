@@ -7,8 +7,9 @@ import screed
 
 configfile: "conf/db-config.yml"
 
-basename = config.get('basename', '')
-# use scripts/get-assembly-acc2.py to get vmr accessions file
+basename = config.get('basename', 'vmr')
+
+# use scripts/get-assembly-acc2.py to get vmr accessions file first. This is SLOW!.
 vmr_file = config.get('vmr_acc_tsv', '')
 if not basename and vmr_file:
     if vmr_file:
@@ -17,11 +18,6 @@ if not basename and vmr_file:
         sys.exit(f"please provide a basename as 'basename' in the configfile {configfile}")
     else:
         sys.exit(f"please provide a basename ('basename') and vmr accessions file ('vmr_acc_tsv') in the configfile {configfile}")
-
-# gbsketch_csv = vmr_file.rsplit('.tsv')[0] + '.gbsketch.csv'
-# urlsketch_csv = vmr_file.rsplit('.tsv')[0] + '.urlsketch.csv'
-# assert os.path.exists(gbsketch_csv)
-# assert os.path.exists(urlsketch_csv)
 
 assembly_fasta_dir = config.get('assembly_fasta_dir', "genbank/genomes")
 curated_fasta_dir = config.get('curated_fasta_dir', f'genbank/curated/{basename}')
@@ -39,10 +35,6 @@ for moltype in moltypes:
     scaleds = sourmash_params[moltype]["scaled"]
     combo = expand(f"{moltype}-k{{k}}-sc{{sc}}", k=ksizes, sc=scaleds)
     param_combos.extend(combo)
-
-# select as needed
-#param_combos = [x for x in param_combos if x.endswith('-sc50')]
-#print(param_combos)
 
 # fns for building params for sourmash sketching
 """
@@ -264,17 +256,3 @@ rule build_blast_nucl_index:
         gunzip -c {input.fasta} | makeblastdb -in - -dbtype nucl -parse_seqids \
                -out {params.out_base} -title {params.title} 2> {log}
         """
-
-# rule build_prot_index:
-#     input:
-#         fromfile=os.path.join(out_dir, "{basename}.fromfile.csv"),
-#         fasta = os.path.join(out_dir, "{basename}.protein.fa.gz"),
-#     output:
-#         index = os.path.join(out_dir, "diamond", "{basename}.protein.fa.gz" + ".dmnd"),
-#     log:  os.path.join(logs_dir, "diamond-index", "{basename}.log")
-#     benchmark:  os.path.join(logs_dir, "diamond-index", "{basename}.benchmark")
-#     conda: "conf/env/diamond.yml"
-#     shell:
-#         """
-#         diamond makedb --in {input.fasta} --db {output.index} --quiet 2> {log}
-#         """
