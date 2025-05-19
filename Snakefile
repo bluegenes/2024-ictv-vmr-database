@@ -75,7 +75,7 @@ rule all:
 rule download_assembly_summary:
     output:
         summary = 'genbank/assembly_summary.viral.txt',
-        historical = 'genbank/assembly_summary_historicam.txt', # includes suppressed accessions, etc
+        historical = 'genbank/assembly_summary_historical.txt', # includes suppressed accessions, etc
     shell: 
         """
         curl -L https://ftp.ncbi.nlm.nih.gov/genomes/genbank/viral/assembly_summary.txt > {output.summary}
